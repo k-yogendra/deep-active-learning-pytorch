@@ -61,7 +61,7 @@ ACTIVE_LEARNING:
   # Active sampling budget (at each episode)
   BUDGET_SIZE: 5000
   # Active sampling method
-  SAMPLING_FN: 'dbal' # 'random', 'uncertainty', 'entropy', 'margin', 'bald', 'vaal', 'coreset', 'ensemble_var_R'
+  SAMPLING_FN: 'dbal' # 'random', 'uncertainty', 'entropy', 'margin', 'bald', 'baldD', 'adaptive_disparity_sampling', 'entropy_gradient_divergence', 'decision_boundary_exploration' , 'contextual_clarity_sampling ', 'uncertainty_propagation_sampling', 'confidence_disparity_sampling', 'vaal', 'coreset', 'ensemble_var_R'
   # Initial labeled pool ratio (% of total train set that should be labeled before AL begins)
   INIT_L_RATIO: 0.1
   # Max AL episodes

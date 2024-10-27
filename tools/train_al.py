@@ -172,6 +172,7 @@ def main(cfg):
     test_loader = data_obj.getTestLoader(data=test_data, test_batch_size=cfg.TRAIN.BATCH_SIZE, seed_id=cfg.RNG_SEED)
 
     # Initialize the model.  
+    # print(cfg)
     model = model_builder.build_model(cfg)
     print("model: {}\n".format(cfg.MODEL.TYPE))
     logger.info("model: {}\n".format(cfg.MODEL.TYPE))
@@ -389,24 +390,20 @@ def test_model(test_loader, checkpoint_file, cfg, cur_episode):
 
     return test_acc
 
-
 def train_epoch(train_loader, model, loss_fun, optimizer, train_meter, cur_epoch, cfg, clf_iter_count, clf_change_lr_iter, clf_max_iter):
     """Performs one epoch of training."""
     global plot_episode_xvalues
     global plot_episode_yvalues
-
     global plot_epoch_xvalues
     global plot_epoch_yvalues
-
     global plot_it_x_values
     global plot_it_y_values
 
     # Shuffle the data
-    #loader.shuffle(train_loader, cur_epoch)
-    if cfg.NUM_GPUS>1:  train_loader.sampler.set_epoch(cur_epoch)
+    if cfg.NUM_GPUS > 1:  
+        train_loader.sampler.set_epoch(cur_epoch)
 
     # Update the learning rate
-    # Currently we only support LR schedules for only 'SGD' optimizer
     lr = optim.get_epoch_lr(cfg, cur_epoch)
     if cfg.OPTIM.TYPE == "sgd":
         optim.set_lr(optimizer, lr)
@@ -416,119 +413,215 @@ def train_epoch(train_loader, model, loss_fun, optimizer, train_meter, cur_epoch
 
     # Enable training mode
     model.train()
-    train_meter.iter_tic() #This basically notes the start time in timer class defined in utils/timer.py
+    train_meter.iter_tic()
 
     len_train_loader = len(train_loader)
     for cur_iter, (inputs, labels) in enumerate(train_loader):
-        #ensuring that inputs are floatTensor as model weights are
-        inputs = inputs.type(torch.cuda.FloatTensor)
-        inputs, labels = inputs.cuda(), labels.cuda(non_blocking=True)
-        # Perform the forward pass
+        # Convert inputs to float tensors and labels to long tensors
+        inputs = inputs.float().cuda(non_blocking=True)
+        labels = labels.long().cuda(non_blocking=True)  # Ensure labels are Long tensors
+
+        # Forward pass
         preds = model(inputs)
+
+        # Ensure preds have shape [batch_size, num_classes] (for cross_entropy)
+        if preds.dim() == 1:
+            preds = preds.unsqueeze(1)
+
         # Compute the loss
         loss = loss_fun(preds, labels)
-        # Perform the backward pass
+
+        # Backward pass
         optimizer.zero_grad()
         loss.backward()
-        # Update the parametersSWA
         optimizer.step()
-        # Compute the errors
-        top1_err, top5_err = mu.topk_errors(preds, labels, [1, 5])
-        # Combine the stats across the GPUs
-        # if cfg.NUM_GPUS > 1:
-        #     #Average error and losses across GPUs
-        #     #Also this this calls wait method on reductions so we are ensured
-        #     #to obtain synchronized results
-        #     loss, top1_err = du.scaled_all_reduce(
-        #         [loss, top1_err]
-        #     )
-        # Copy the stats from GPU to CPU (sync point)
-        loss, top1_err = loss.item(), top1_err.item()
-        # #Only master process writes the logs which are used for plotting
-        # if du.is_master_proc():
-        if cur_iter != 0 and cur_iter%19 == 0:
-            #because cur_epoch starts with 0
-            plot_it_x_values.append((cur_epoch)*len_train_loader + cur_iter)
-            plot_it_y_values.append(loss)
-            save_plot_values([plot_it_x_values, plot_it_y_values],["plot_it_x_values", "plot_it_y_values"], out_dir=cfg.EPISODE_DIR, isDebug=False)
-            # print(plot_it_x_values)
-            # print(plot_it_y_values)
-            #Plot loss graphs
-            plot_arrays(x_vals=plot_it_x_values, y_vals=plot_it_y_values, x_name="Iterations", y_name="Loss", dataset_name=cfg.DATASET.NAME, out_dir=cfg.EPISODE_DIR,)
-            print('Training Epoch: {}/{}\tIter: {}/{}'.format(cur_epoch+1, cfg.OPTIM.MAX_EPOCH, cur_iter, len(train_loader)))
 
-        #Compute the difference in time now from start time initialized just before this for loop.
+        # Compute the errors
+        if cfg.MODEL.NUM_CLASSES > 2:
+            top1_err, top5_err = mu.topk_errors(preds, labels, [1, 5])
+        else:
+            top1_err = mu.topk_errors(preds, labels, [1])[0]  # Only get top-1 error
+
+        # Copy the stats from GPU to CPU (sync point)
+        # Copy the stats from GPU to CPU (sync point)
+        if isinstance(loss, torch.Tensor):
+            loss = loss.item()
+
+        if isinstance(top1_err, torch.Tensor):
+            top1_err = top1_err.item()
+
+
+        # Plotting and logging every 19 iterations
+        if cur_iter != 0 and cur_iter % 19 == 0:
+            plot_it_x_values.append((cur_epoch) * len_train_loader + cur_iter)
+            plot_it_y_values.append(loss)
+            save_plot_values(
+                [plot_it_x_values, plot_it_y_values],
+                ["plot_it_x_values", "plot_it_y_values"],
+                out_dir=cfg.EPISODE_DIR,
+                isDebug=False
+            )
+            plot_arrays(
+                x_vals=plot_it_x_values,
+                y_vals=plot_it_y_values,
+                x_name="Iterations",
+                y_name="Loss",
+                dataset_name=cfg.DATASET.NAME,
+                out_dir=cfg.EPISODE_DIR
+            )
+            print(f'Training Epoch: {cur_epoch + 1}/{cfg.OPTIM.MAX_EPOCH}\tIter: {cur_iter}/{len(train_loader)}')
+
+        # Update train meter
         train_meter.iter_toc()
-        train_meter.update_stats(top1_err=top1_err, loss=loss, \
-            lr=lr, mb_size=inputs.size(0) * cfg.NUM_GPUS)
+        train_meter.update_stats(
+            top1_err=top1_err, 
+            loss=loss, 
+            lr=lr, 
+            mb_size=inputs.size(0) * cfg.NUM_GPUS
+        )
         train_meter.log_iter_stats(cur_epoch, cur_iter)
         train_meter.iter_tic()
+
     # Log epoch stats
     train_meter.log_epoch_stats(cur_epoch)
     train_meter.reset()
+
     return loss, clf_iter_count
 
+
+
+# @torch.no_grad()
+# def test_epoch(test_loader, model, test_meter, cur_epoch):
+#     """Evaluates the model on the test set."""
+
+#     global plot_episode_xvalues
+#     global plot_episode_yvalues
+
+#     global plot_epoch_xvalues
+#     global plot_epoch_yvalues
+
+#     global plot_it_x_values
+#     global plot_it_y_values
+
+#     if torch.cuda.is_available():
+#         model.cuda()
+
+#     # Enable eval mode
+#     model.eval()
+#     test_meter.iter_tic()
+
+#     misclassifications = 0.
+#     totalSamples = 0.
+
+#     for cur_iter, (inputs, labels) in enumerate(test_loader):
+#         with torch.no_grad():
+#             # Transfer the data to the current GPU device
+#             inputs, labels = inputs.cuda(), labels.cuda(non_blocking=True)
+#             inputs = inputs.type(torch.cuda.FloatTensor)
+#             # Compute the predictions
+#             preds = model(inputs)
+#             # Compute the errors
+#             top1_err, top5_err = mu.topk_errors(preds, labels, [1, 5])
+#             # Combine the errors across the GPUs
+#             # if cfg.NUM_GPUS > 1:
+#             #     top1_err = du.scaled_all_reduce([top1_err])
+#             #     #as above returns a list
+#             #     top1_err = top1_err[0]
+#             # Copy the errors from GPU to CPU (sync point)
+#             # top1_err = top1_err.item()
+#             if isinstance(top1_err, torch.Tensor):
+#                 top1_err = top1_err.item()
+#             # Multiply by Number of GPU's as top1_err is scaled by 1/Num_GPUs
+#             misclassifications += top1_err * inputs.size(0) * cfg.NUM_GPUS
+#             totalSamples += inputs.size(0)*cfg.NUM_GPUS
+#             test_meter.iter_toc()
+#             # Update and log stats
+#             test_meter.update_stats(
+#                 top1_err=top1_err, mb_size=inputs.size(0) * cfg.NUM_GPUS
+#             )
+#             test_meter.log_iter_stats(cur_epoch, cur_iter)
+#             test_meter.iter_tic()
+#     # Log epoch stats
+#     test_meter.log_epoch_stats(cur_epoch)
+#     test_meter.reset()
+
+#     return misclassifications/totalSamples
 
 @torch.no_grad()
 def test_epoch(test_loader, model, test_meter, cur_epoch):
     """Evaluates the model on the test set."""
-
-    global plot_episode_xvalues
-    global plot_episode_yvalues
-
-    global plot_epoch_xvalues
-    global plot_epoch_yvalues
-
-    global plot_it_x_values
-    global plot_it_y_values
-
     if torch.cuda.is_available():
         model.cuda()
 
-    # Enable eval mode
+    # Enable evaluation mode
     model.eval()
     test_meter.iter_tic()
 
-    misclassifications = 0.
-    totalSamples = 0.
+    misclassifications = 0.0
+    total_samples = 0
 
     for cur_iter, (inputs, labels) in enumerate(test_loader):
-        with torch.no_grad():
-            # Transfer the data to the current GPU device
-            inputs, labels = inputs.cuda(), labels.cuda(non_blocking=True)
-            inputs = inputs.type(torch.cuda.FloatTensor)
-            # Compute the predictions
-            preds = model(inputs)
-            # Compute the errors
-            top1_err, top5_err = mu.topk_errors(preds, labels, [1, 5])
-            # Combine the errors across the GPUs
-            # if cfg.NUM_GPUS > 1:
-            #     top1_err = du.scaled_all_reduce([top1_err])
-            #     #as above returns a list
-            #     top1_err = top1_err[0]
-            # Copy the errors from GPU to CPU (sync point)
-            top1_err = top1_err.item()
-            # Multiply by Number of GPU's as top1_err is scaled by 1/Num_GPUs
-            misclassifications += top1_err * inputs.size(0) * cfg.NUM_GPUS
-            totalSamples += inputs.size(0)*cfg.NUM_GPUS
-            test_meter.iter_toc()
-            # Update and log stats
-            test_meter.update_stats(
-                top1_err=top1_err, mb_size=inputs.size(0) * cfg.NUM_GPUS
-            )
-            test_meter.log_iter_stats(cur_epoch, cur_iter)
-            test_meter.iter_tic()
-    # Log epoch stats
+        print(f"Inputs shape: {inputs.shape}, Labels shape: {labels.shape}")
+        inputs, labels = inputs.cuda(), labels.cuda(non_blocking=True)
+        inputs = inputs.type(torch.cuda.FloatTensor)
+
+        # Forward pass
+        preds = model(inputs)
+
+        # Handle binary classification by squeezing predictions
+        if preds.dim() > 1 and preds.size(1) == 1:
+            preds = preds.squeeze(1)
+
+        # Check if the batch size of labels matches preds
+        if labels.dim() > 1 and labels.size(0) != preds.size(0):
+            # If labels are flattened across multiple samples, reshape them
+            labels = labels.view(preds.size(0), -1).squeeze(1)
+
+        # Ensure labels have the correct shape
+        if labels.size(0) != preds.size(0):
+            raise ValueError(f"Mismatch: preds batch size {preds.size(0)}, labels batch size {labels.size(0)}")
+
+        # Compute top-1 error
+        top1_err = mu.topk_errors(preds, labels, [1])[0]
+
+        # Accumulate errors and samples
+        misclassifications += float(top1_err * inputs.size(0))
+        total_samples += inputs.size(0)
+
+        test_meter.iter_toc()
+        test_meter.update_stats(top1_err=top1_err, mb_size=inputs.size(0))
+        test_meter.log_iter_stats(cur_epoch, cur_iter)
+        test_meter.iter_tic()
+
     test_meter.log_epoch_stats(cur_epoch)
     test_meter.reset()
 
-    return misclassifications/totalSamples
+    return misclassifications / total_samples
 
 
+
+
+
+
+
+
+
+
+# if __name__ == "__main__":
+#     cfg.merge_from_file(argparser().parse_args().cfg_file)
+#     cfg.merge_from_file(argparser().parse_args().cfg_file)
+#     cfg.EXP_NAME = argparser().parse_args().exp_name
+#     cfg.ACTIVE_LEARNING.SAMPLING_FN = argparser().parse_args().al
+#     main(cfg)
 
 if __name__ == "__main__":
-    cfg.merge_from_file(argparser().parse_args().cfg_file)
-    cfg.merge_from_file(argparser().parse_args().cfg_file)
-    cfg.EXP_NAME = argparser().parse_args().exp_name
-    cfg.ACTIVE_LEARNING.SAMPLING_FN = argparser().parse_args().al
+    args = argparser().parse_args()
+    cfg.merge_from_file(args.cfg_file)
+    cfg.EXP_NAME = args.exp_name
+    cfg.ACTIVE_LEARNING.SAMPLING_FN = args.al
+
+    # Ensure INPUT_DIM is set for MLP model
+    if cfg.MODEL.TYPE == "mlp" and not hasattr(cfg.DATASET, 'INPUT_DIM'):
+        raise ValueError("DATASET.INPUT_DIM is required for the MLP model.")
+
     main(cfg)

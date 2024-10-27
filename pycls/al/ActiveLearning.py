@@ -83,6 +83,40 @@ class ActiveLearning:
         elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "bald" or self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "BALD":
             activeSet, uSet = self.sampler.bald(budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset)
 
+        ############################################### New Novel Sampling Methods  ############################################################
+        elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "baldD":
+            activeSet, uSet = self.sampler.baldD(budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset)
+
+        elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "adaptive_disparity_sampling" or self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "ADS":
+            activeSet, uSet = self.sampler.adaptive_disparity_sampling(
+                budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset
+            )
+
+        elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "entropy_gradient_divergence" or self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "EGD":
+            activeSet, uSet = self.sampler.entropy_gradient_divergence(
+                budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset
+            )
+
+        elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "decision_boundary_exploration" or self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "DBE":
+            activeSet, uSet = self.sampler.decision_boundary_exploration(
+                budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset
+            )
+
+        elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "contextual_clarity_sampling" or self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "CCS":
+            activeSet, uSet = self.sampler.contextual_clarity_sampling(
+                budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset
+            )
+
+        elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "uncertainty_propagation_sampling" or self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "UPS":
+            activeSet, uSet = self.sampler.uncertainty_propagation_sampling(
+                budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset
+            )
+
+        elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "confidence_disparity_sampling" or self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "CDS":
+            activeSet, uSet = self.sampler.confidence_disparity_sampling(
+                budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_model=clf_model, dataset=trainDataset
+            )
+        ###################################################################################################################################
         elif self.cfg.ACTIVE_LEARNING.SAMPLING_FN == "ensemble_var_R":
             activeSet, uSet = self.sampler.ensemble_var_R(budgetSize=self.cfg.ACTIVE_LEARNING.BUDGET_SIZE, uSet=uSet, clf_models=supportingModels, dataset=trainDataset)
 

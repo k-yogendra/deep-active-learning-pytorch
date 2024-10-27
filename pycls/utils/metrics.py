@@ -17,31 +17,80 @@ from pycls.core.config import cfg
 _B_IN_MB = 1024 * 1024
 
 
+# def topks_correct(preds, labels, ks):
+#     """Computes the number of top-k correct predictions for each k."""
+#     assert preds.size(0) == labels.size(0), \
+#         'Batch dim of predictions and labels must match'
+#     # Find the top max_k predictions for each sample
+#     _top_max_k_vals, top_max_k_inds = torch.topk(
+#         preds, max(ks), dim=1, largest=True, sorted=True
+#     )
+#     # (batch_size, max_k) -> (max_k, batch_size)
+#     top_max_k_inds = top_max_k_inds.t()
+#     # (batch_size, ) -> (max_k, batch_size)
+#     rep_max_k_labels = labels.view(1, -1).expand_as(top_max_k_inds)
+#     # (i, j) = 1 if top i-th prediction for the j-th sample is correct
+#     top_max_k_correct = top_max_k_inds.eq(rep_max_k_labels)
+#     # Compute the number of topk correct predictions for each k
+#     topks_correct = [
+#         top_max_k_correct[:k, :].reshape(-1).float().sum() for k in ks
+#     ]
+#     return topks_correct
+
+import torch
+
+import torch
+
 def topks_correct(preds, labels, ks):
-    """Computes the number of top-k correct predictions for each k."""
-    assert preds.size(0) == labels.size(0), \
-        'Batch dim of predictions and labels must match'
-    # Find the top max_k predictions for each sample
-    _top_max_k_vals, top_max_k_inds = torch.topk(
-        preds, max(ks), dim=1, largest=True, sorted=True
-    )
-    # (batch_size, max_k) -> (max_k, batch_size)
-    top_max_k_inds = top_max_k_inds.t()
-    # (batch_size, ) -> (max_k, batch_size)
-    rep_max_k_labels = labels.view(1, -1).expand_as(top_max_k_inds)
-    # (i, j) = 1 if top i-th prediction for the j-th sample is correct
-    top_max_k_correct = top_max_k_inds.eq(rep_max_k_labels)
-    # Compute the number of topk correct predictions for each k
-    topks_correct = [
-        top_max_k_correct[:k, :].reshape(-1).float().sum() for k in ks
-    ]
-    return topks_correct
+    """Computes the number of top-k correct predictions."""
+    # Check initial dimensions
+    print(f"Initial Preds shape: {preds.shape}, Labels shape: {labels.shape}")
+
+    if preds.dim() == 1 or preds.size(1) == 1:
+        # Binary classification: binarize predictions
+        preds = (preds > 0.5).long().view(-1)
+        labels = labels.long().view(-1)
+
+        # Check binary case dimensions
+        print(f"Binary case - Preds shape: {preds.shape}, Labels shape: {labels.shape}")
+
+        correct = preds.eq(labels)
+        num_correct = [correct.sum().item()] * len(ks)
+    else:
+        max_k = max(ks)
+        _, top_max_k_inds = torch.topk(preds, max_k, dim=1, largest=True, sorted=True)
+
+        # Expand labels to match top_max_k_inds
+        labels_exp = labels.view(-1, 1).expand_as(top_max_k_inds)
+
+        # Debug shape information
+        print(f"Top-k Indices shape: {top_max_k_inds.shape}, Labels expanded shape: {labels_exp.shape}")
+
+        correct = top_max_k_inds.eq(labels_exp)
+        num_correct = [correct[:, :k].sum().item() for k in ks]
+
+    return num_correct
+
+
+
+
+
 
 
 def topk_errors(preds, labels, ks):
-    """Computes the top-k error for each k."""
+    """Computes the top-k error for each k in ks."""
     num_topks_correct = topks_correct(preds, labels, ks)
-    return [(1.0 - x / preds.size(0)) * 100.0 for x in num_topks_correct]
+    num_samples = preds.size(0)
+
+    topk_errors = [(1.0 - (x / num_samples)) * 100.0 for x in num_topks_correct]
+    return topk_errors
+
+
+
+# def topk_errors(preds, labels, ks):
+#     """Computes the top-k error for each k."""
+#     num_topks_correct = topks_correct(preds, labels, ks)
+#     return [(1.0 - x / preds.size(0)) * 100.0 for x in num_topks_correct]
 
 
 def topk_accuracies(preds, labels, ks):

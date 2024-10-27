@@ -2,211 +2,144 @@
 # GitHub: https://github.com/PrateekMunjal
 # ----------------------------------------------------------
 
+# Import necessary modules
+import os
 import random
 import torch
 import torchvision
 import numpy as np
-
 from torch.utils.data import DataLoader
-from torchvision import transforms, datasets
+from torchvision import transforms
 from torch.utils.data.sampler import SubsetRandomSampler
+from torchvision.transforms import Lambda
 
 from .randaugment import RandAugmentPolicy
 from .simclr_augment import get_simclr_ops
-from .utils import helpers
 import pycls.utils.logging as lu
-from pycls.datasets.custom_datasets import CIFAR10, CIFAR100, MNIST, SVHN
+from pycls.datasets.custom_datasets import CIFAR10, CIFAR100, MNIST, SVHN, CoolRoofDataset
 from pycls.datasets.imbalanced_cifar import IMBALANCECIFAR10, IMBALANCECIFAR100
 from pycls.datasets.sampler import IndexedSequentialSampler
 from pycls.datasets.tiny_imagenet import TinyImageNet
+from pycls.datasets.preprocess_cool_roof import load_and_preprocess
+
 logger = lu.get_logger(__name__)
 
 class Data:
     """
-    Contains all data related functions. For working with new dataset 
+    Contains all data related functions. For working with new dataset, 
     make changes to following functions:
-    0. Create labeled.txt and unlabaled.txt for Active Learning
     1. getDataset
-    2. getAugmentations
+    2. getPreprocessOps
     3. getDataLoaders
-
     """
     def __init__(self, cfg):
         """
-        Initializes dataset attribute of (Data class) object with specified "dataset" argument.
+        Initializes dataset attributes.
         INPUT:
         cfg: yacs.config, config object
         """
         self.dataset = cfg.DATASET.NAME
         self.data_dir = cfg.DATASET.ROOT_DIR
-        self.datasets_accepted = cfg.DATASET.ACCEPTED
-        # self.target_dir = {"test": cfg.DATASET.TEST_DIR, "train": cfg.DATASET.TRAIN_DIR, "val": cfg.DATASET.VAL_DIR}
+        self.datasets_accepted = [
+            "MNIST", 
+            "SVHN", 
+            "CIFAR10", 
+            "CIFAR100", 
+            "TINYIMAGENET", 
+            "IMBALANCED_CIFAR10", 
+            "IMBALANCED_CIFAR100",
+            "cool_roof"  # Add cool_roof here
+        ]
         self.eval_mode = False
         self.aug_method = cfg.DATASET.AUG_METHOD
         self.rand_augment_N = 1 if cfg is None else cfg.RANDAUG.N
         self.rand_augment_M = 5 if cfg is None else cfg.RANDAUG.M
 
-    def about(self):
-        """
-        Show all properties of this class.
-        """
-        print(self.__dict__)
-
-
-    def make_data_lists(self, exp_dir):
-        """
-        Creates train.txt, test.txt and valid.txt. Text format is chosen to allow readability. 
-        Keyword arguments:
-            exp_dir -- Full path to the experiment directory where index lists will be saved
-        """
-        train = os.path.join(exp_dir, 'train.txt')
-        test = os.path.join(exp_dir, 'test.txt')
-        
-        if os.path.exists(train) or os.path.exists(test):
-            out = f'train.txt or test.text already exist at {exp_dir}'
-            return None
-        
-        train_list = glob.glob(os.path.join(path, 'train/**/*.png'), recursive=True)
-        test_list = glob.glob(os.path.join(path, 'test/**/*.png'), recursive=True)
-
-        with open(train, 'w') as filehandle:
-            filehandle.writelines("%s\n" % index for index in train_list)
-        
-        with open(test, 'w') as filehandle:
-            filehandle.writelines("%s\n" % index for index in test_list)
-
-
     def getPreprocessOps(self):
         """
-        This function specifies the steps to be accounted for preprocessing.
-        
-        INPUT:
-        None
-        
-        OUTPUT:
-        Returns a list of preprocessing steps. Note the order of operations matters in the list.
+        Specifies preprocessing steps for the dataset.
         """
-        if self.dataset in self.datasets_accepted:
-            ops = []
-            norm_mean = []
-            norm_std = []
+        ops = []
 
-            if self.dataset in ["CIFAR10", "CIFAR100", 'IMBALANCED_CIFAR10', 'IMBALANCED_CIFAR100']:
-                ops = [transforms.RandomCrop(32, padding=4)]
-                norm_mean = [0.4914, 0.4822, 0.4465]
-                norm_std = [0.247 , 0.2435, 0.2616]
-            elif self.dataset == "MNIST":
-                ops = [transforms.Resize(32)] 
-                norm_mean = [0.1307,]
-                norm_std = [0.3081,]
-            elif self.dataset == "TINYIMAGENET":
-                ops = [transforms.RandomResizedCrop(64)]
-                # Using ImageNet values 
-                norm_mean = [0.485, 0.456, 0.406]
-                norm_std = [0.229, 0.224, 0.225]
-            elif self.dataset in ["SVHN"]:
-                ops = [transforms.RandomCrop(32, padding=4)]
-                norm_mean = [0.4376, 0.4437, 0.4728]
-                norm_std = [0.1980, 0.2010, 0.1970]
-            else:
-                raise NotImplementedError
-
-            if not self.eval_mode and (self.aug_method == 'simclr'):
-                ops.insert(1, get_simclr_ops(input_shape=cfg.TRAIN.IM_SIZE))
-
-            elif not self.eval_mode and (self.aug_method == 'randaug'):
-                #N and M values are taken from Experiment Section of RandAugment Paper
-                #Though RandAugment paper works with WideResNet model
-                ops.append(RandAugmentPolicy(N=self.rand_augment_N, M=self.rand_augment_M))
-
-            elif not self.eval_mode and (self.aug_method == 'hflip'):
-                ops.append(transforms.RandomHorizontalFlip())
-
-            ops.append(transforms.ToTensor())
+        if self.dataset in ["CIFAR10", "CIFAR100", "IMBALANCED_CIFAR10", "IMBALANCED_CIFAR100"]:
+            ops = [transforms.RandomCrop(32, padding=4)]
+            norm_mean, norm_std = [0.4914, 0.4822, 0.4465], [0.247, 0.2435, 0.2616]
             ops.append(transforms.Normalize(norm_mean, norm_std))
 
-            if self.eval_mode:
-                ops = [ops[0], transforms.ToTensor(), transforms.Normalize(norm_mean, norm_std)]
-            else:
-                print("Preprocess Operations Selected ==> ", ops)
-                # logger.info("Preprocess Operations Selected ==> ", ops)
-            return ops
+        elif self.dataset == "MNIST":
+            ops = [transforms.Resize(32)]
+            norm_mean, norm_std = [0.1307], [0.3081]
+            ops.append(transforms.Normalize(norm_mean, norm_std))
+
+        elif self.dataset == "TINYIMAGENET":
+            ops = [transforms.RandomResizedCrop(64)]
+            norm_mean, norm_std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+            ops.append(transforms.Normalize(norm_mean, norm_std))
+
+        elif self.dataset == "SVHN":
+            ops = [transforms.RandomCrop(32, padding=4)]
+            norm_mean, norm_std = [0.4376, 0.4437, 0.4728], [0.1980, 0.2010, 0.1970]
+            ops.append(transforms.Normalize(norm_mean, norm_std))
+
+        elif self.dataset == "cool_roof":
+            # Add normalization suitable for numerical data
+            ops = [Lambda(lambda x: (x - x.mean()) / (x.std() + 1e-5))]  # Example normalization for numerical tensors
+
         else:
-            print("Either the specified {} dataset is not added or there is no if condition in getDataset function of Data class".format(self.dataset))
-            logger.info("Either the specified {} dataset is not added or there is no if condition in getDataset function of Data class".format(self.dataset))
-            raise NotImplementedError
+            raise NotImplementedError(f"{self.dataset} is not supported in preprocessing operations.")
+
+        return ops
+
 
 
     def getDataset(self, save_dir, isTrain=True, isDownload=False):
         """
-        This function returns the dataset instance and number of data points in it.
-        
+        Returns the dataset instance.
         INPUT:
-        save_dir: String, It specifies the path where dataset will be saved if downloaded.
-        
-        preprocess_steps(optional): List, Contains the ordered operations used for preprocessing the data.
-        
-        isTrain (optional): Bool, If true then Train partition is downloaded else Test partition.
-        
-        isDownload (optional): Bool, If true then dataset is saved at path specified by "save_dir".
-        
+        save_dir: Directory to save or load the dataset.
+        isTrain: Bool, if True loads the training set; else loads the validation/test set.
         OUTPUT:
-        (On Success) Returns the tuple of dataset instance and length of dataset.
-        (On Failure) Returns Message as <dataset> not specified.
+        Returns the dataset instance and its length.
         """
-        self.eval_mode = True
-        test_preops_list = self.getPreprocessOps()
-        test_preprocess_steps = transforms.Compose(test_preops_list)
-        self.eval_mode = False
-        
-        if isTrain:
-            preprocess_steps = self.getPreprocessOps()
-        else:
-            preprocess_steps = test_preops_list
-        preprocess_steps = transforms.Compose(preprocess_steps)
-
-
+        self.eval_mode = not isTrain
+        preprocess_steps = transforms.Compose(self.getPreprocessOps())
 
         if self.dataset == "MNIST":
-            mnist = MNIST(save_dir, train=isTrain, transform=preprocess_steps, test_transform=test_preprocess_steps, download=isDownload)
+            mnist = MNIST(save_dir, train=isTrain, transform=preprocess_steps, download=isDownload)
             return mnist, len(mnist)
-
         elif self.dataset == "CIFAR10":
-            cifar10 = CIFAR10(save_dir, train=isTrain, transform=preprocess_steps, test_transform=test_preprocess_steps, download=isDownload)
+            cifar10 = CIFAR10(save_dir, train=isTrain, transform=preprocess_steps, download=isDownload)
             return cifar10, len(cifar10)
-
         elif self.dataset == "CIFAR100":
-            cifar100 = CIFAR100(save_dir, train=isTrain, transform=preprocess_steps,  test_transform=test_preprocess_steps, download=isDownload)
+            cifar100 = CIFAR100(save_dir, train=isTrain, transform=preprocess_steps, download=isDownload)
             return cifar100, len(cifar100)
-
         elif self.dataset == "SVHN":
-            if isTrain:
-                svhn = SVHN(save_dir, split='train', transform=preprocess_steps,  test_transform=test_preprocess_steps, download=isDownload)
-            else:
-                svhn = SVHN(save_dir, split='test', transform=preprocess_steps,  test_transform=test_preprocess_steps, download=isDownload)
+            svhn = SVHN(save_dir, split='train' if isTrain else 'test', transform=preprocess_steps, download=isDownload)
             return svhn, len(svhn)
-
         elif self.dataset == "TINYIMAGENET":
-            if isTrain:
-                # tiny = datasets.ImageFolder(save_dir+'/train', transform=preprocess_steps)
-                tiny = TinyImageNet(save_dir, split='train', transform=preprocess_steps, test_transform=test_preprocess_steps)
-            else:
-                # tiny = datasets.ImageFolder(save_dir+'/val', transform=preprocess_steps)
-                tiny = TinyImageNet(save_dir, split='val', transform=preprocess_steps, test_transform=test_preprocess_steps)
+            tiny = TinyImageNet(save_dir, split='train' if isTrain else 'val', transform=preprocess_steps)
             return tiny, len(tiny)
-        
-        elif self.dataset == 'IMBALANCED_CIFAR10':
-            im_cifar10 = IMBALANCECIFAR10(save_dir, train=isTrain, transform=preprocess_steps, test_transform=test_preprocess_steps)
+        elif self.dataset == "IMBALANCED_CIFAR10":
+            im_cifar10 = IMBALANCECIFAR10(save_dir, train=isTrain, transform=preprocess_steps)
             return im_cifar10, len(im_cifar10)
-
-        elif self.dataset ==  'IMBALANCED_CIFAR100':
-            im_cifar100 = IMBALANCECIFAR100(save_dir, train=isTrain, transform=preprocess_steps, test_transform=test_preprocess_steps)
+        elif self.dataset == "IMBALANCED_CIFAR100":
+            im_cifar100 = IMBALANCECIFAR100(save_dir, train=isTrain, transform=preprocess_steps)
             return im_cifar100, len(im_cifar100)
+        
+        elif self.dataset == "cool_roof":
+            if isTrain:
+                features, labels, _, _ = load_and_preprocess(self.data_dir)
+            else:
+                _, _, features, labels = load_and_preprocess(self.data_dir)
+            
+            # Apply only numerical transformations
+            dataset = CoolRoofDataset(features, labels, transform=preprocess_steps)
+            return dataset, len(dataset)
+
 
         else:
-            print("Either the specified {} dataset is not added or there is no if condition in getDataset function of Data class".format(self.dataset))
-            logger.info("Either the specified {} dataset is not added or there is no if condition in getDataset function of Data class".format(self.dataset))
-            raise NotImplementedError
+            raise NotImplementedError(f"{self.dataset} is not implemented in getDataset.")
+
 
 
     def makeLUVSets(self, train_split_ratio, val_split_ratio, data, seed_id, save_dir):
@@ -566,3 +499,18 @@ class Data:
         
         class_weights = torch.Tensor(class_weights)
         return class_weights
+    
+
+from pycls.datasets.custom_datasets import CoolRoofDataset
+from pycls.datasets.preprocess_cool_roof import load_and_preprocess
+
+def getDataset(name, split, transform=None, test_transform=None):
+    if name == "cool_roof":
+        if split == "train":
+            features, labels, _, _ = load_and_preprocess("/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_roofs_varified.csv")
+            return CoolRoofDataset(features, labels, transform=transform, test_transform=test_transform)
+        elif split == "val":
+            _, _, unseen_cool_features, unseen_noncool_features = load_and_preprocess("/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_roofs_varified.csv")
+            features = np.vstack((unseen_cool_features, unseen_noncool_features))
+            labels = np.hstack((np.ones(unseen_cool_features.shape[0]), np.zeros(unseen_noncool_features.shape[0])))
+            return CoolRoofDataset(features, labels, transform=transform, test_transform=test_transform)

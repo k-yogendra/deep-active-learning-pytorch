@@ -1,0 +1,31 @@
+EXP_NAME: "cool_roof_active_learning"
+DATASET:
+  NAME: "cool_roof"
+  ROOT_DIR: "/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_labels_enriched.csv"  # Adjust this to your actual dataset directory
+  # NUM_CLASSES: 2
+  # TRAIN_SPLIT: "train"
+  # VAL_SPLIT: "val"
+  # TEST_SPLIT: "test"
+  VAL_RATIO: 0.1
+  ACCEPTED: ["cool_roof"]
+# AUG_METHOD: "hflip"  # Example of augmentation, change as needed
+
+MODEL:
+  # ARCH: "resnet18"
+  TYPE: "resnet18"
+  NUM_CLASSES: 2
+
+# SOLVER:
+#   BASE_LR: 0.001
+#   MAX_EPOCHS: 100
+
+# DATA_LOADER:
+#   BATCH_SIZE: 64
+#   NUM_WORKERS: 4
+#   PIN_MEMORY: True
+
+ACTIVE_LEARNING:
+  INIT_L_RATIO: 0.1
+  MAX_ITER: 5
+  SAMPLING_FN: "dbal"
+

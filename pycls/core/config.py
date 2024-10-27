@@ -225,7 +225,8 @@ _C.DATASET.VAL_RATIO = 0.1
 # Data augmentation methods - 'simclr', 'randaug', 'hflip'
 _C.DATASET.AUG_METHOD = 'hflip' 
 # Accepted Datasets
-_C.DATASET.ACCEPTED = ['MNIST','SVHN','CIFAR10','CIFAR100','TINYIMAGENET', 'IMBALANCED_CIFAR10', 'IMBALANCED_CIFAR100']
+_C.DATASET.ACCEPTED = ["MNIST", "SVHN", "CIFAR10", "CIFAR100", "TINYIMAGENET", "IMBALANCED_CIFAR10", "IMBALANCED_CIFAR100", "cool_roof"]
+_C.DATASET.INPUT_DIM = 0  # Add this line for input dimension
 
 def assert_cfg():
     """Checks config values invariants."""

@@ -124,3 +124,32 @@ class SVHN(torchvision.datasets.SVHN):
 
 
         return img, target
+    
+
+from torch.utils.data import Dataset
+import torch
+
+class CoolRoofDataset(Dataset):
+    def __init__(self, features, labels, transform=None, test_transform=None):
+        self.features = features
+        self.labels = labels
+        self.transform = transform
+        self.test_transform = test_transform
+        self.no_aug = False
+
+    def __len__(self):
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        feature = self.features[idx]
+        label = self.labels[idx]
+
+        # Convert features to torch tensor
+        feature = torch.tensor(feature, dtype=torch.float32)
+
+        # Apply transformations suitable for numerical data
+        if self.transform is not None:
+            feature = self.transform(feature)
+
+        return feature, torch.tensor(label, dtype=torch.float32)
+
