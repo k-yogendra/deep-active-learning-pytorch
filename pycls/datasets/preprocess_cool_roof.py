@@ -6,7 +6,6 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 
-import numpy as np
 import rasterio
 from scipy.stats import entropy, skew, kurtosis
 from skimage.feature import local_binary_pattern
@@ -379,40 +378,43 @@ def get_features(infosys_buildings):
     return all_features_cool, red_cool, green_cool, blue_cool, nir_cool, re_cool, coastal_cool, yellow_cool, pan_cool, hue_cool, saturation_cool, value_cool, all_features_hsv_cool, light_cool, gtor_cool, btoy_cool, all_features_lab_cool, rgb_hsv_lab_cool, rgb, hsv, lab
 
 
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.decomposition import PCA
+import pandas as pd
+import numpy as np
 
-def load_and_preprocess(data_path, n_components=30, test_size=0.15):
-    # Load data from CSV
-    df = pd.read_csv(data_path)
+def load_and_preprocess(data_path, n_components=30):
+    try:
+        # Load data from CSV
+        df = pd.read_csv(data_path)
 
-    # Filter cool and non-cool data
-    cool_files = df[df['label'] == 1]['file_path'].tolist()
-    noncool_files = df[df['label'] == 0]['file_path'].tolist()
+        # Filter cool and non-cool data
+        cool_files = df[df['label'] == 1]['file_path'].tolist()
+        noncool_files = df[df['label'] == 0]['file_path'].tolist()
 
-    # Extract features
-    all_features_cool, *_ = get_features(cool_files)
-    all_features_noncool, *_ = get_features(noncool_files)
+        # Extract features
+        all_features_cool, *_ = get_features(cool_files)
+        all_features_noncool, *_ = get_features(noncool_files)
 
-    # Equalize feature sizes
-    # all_features_cool, all_features_noncool = make_equal(all_features_cool, all_features_noncool)
+        # Concatenate and scale features
+        all_features = np.vstack((all_features_cool, all_features_noncool))
+        scaler = MinMaxScaler()
+        all_features = scaler.fit_transform(all_features)
 
-    # Scale features
-    scaler = MinMaxScaler()
-    all_features = np.concatenate((all_features_cool, all_features_noncool))
-    scaler.fit(all_features)
-    all_features_cool = scaler.transform(all_features_cool)
-    all_features_noncool = scaler.transform(all_features_noncool)
+        # Apply PCA for dimensionality reduction
+        pca = PCA(n_components=n_components)
+        all_features = pca.fit_transform(all_features)
 
-    # Apply PCA
-    pca = PCA(n_components=n_components)
-    all_features_cool = pca.fit_transform(all_features_cool)
-    all_features_noncool = pca.transform(all_features_noncool)
+        # Split scaled features back to cool and non-cool
+        all_features_cool = all_features[:len(all_features_cool)]
+        all_features_noncool = all_features[len(all_features_cool):]
 
-    # Split into train and unseen
-    cool_features, unseen_cool_features = train_test_split(all_features_cool, test_size=test_size, random_state=42)
-    noncool_features, unseen_noncool_features = train_test_split(all_features_noncool, test_size=test_size, random_state=42)
+        # Combine features and create labels as class indices (0 or 1)
+        features = np.vstack((all_features_cool, all_features_noncool))
+        labels = np.hstack((np.ones(all_features_cool.shape[0]), np.zeros(all_features_noncool.shape[0])))
 
-    # Combine and create labels
-    features = np.vstack((cool_features, noncool_features))
-    labels = np.hstack((np.ones(cool_features.shape[0]), np.zeros(noncool_features.shape[0])))
+        return features, labels
 
-    return features, labels, unseen_cool_features, unseen_noncool_features
+    except Exception as e:
+        print(f"Error during data loading and preprocessing: {e}")
+        return None, None

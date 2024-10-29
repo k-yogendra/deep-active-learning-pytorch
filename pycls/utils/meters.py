@@ -5,6 +5,7 @@ from collections import deque
 
 import datetime
 import numpy as np
+import torch
 
 from pycls.core.config import cfg
 from pycls.utils.timer import Timer
@@ -40,13 +41,18 @@ class ScalarMeter(object):
         self.total += value
 
     def get_win_median(self):
-        return np.median(self.deque)
+        # Convert the deque to a tensor and move to CPU before calling .numpy()
+        deque_tensor = torch.tensor(list(self.deque))
+        return np.median(deque_tensor.cpu().numpy())
 
     def get_win_avg(self):
-        return np.mean(self.deque)
+        # Convert the deque to a tensor and move to CPU before calling .numpy()
+        deque_tensor = torch.tensor(list(self.deque))
+        return np.mean(deque_tensor.cpu().numpy())
 
     def get_global_avg(self):
         return self.total / self.count
+
 
 
 class TrainMeter(object):

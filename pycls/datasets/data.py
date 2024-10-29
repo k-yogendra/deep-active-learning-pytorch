@@ -127,12 +127,10 @@ class Data:
             return im_cifar100, len(im_cifar100)
         
         elif self.dataset == "cool_roof":
-            if isTrain:
-                features, labels, _, _ = load_and_preprocess(self.data_dir)
-            else:
-                _, _, features, labels = load_and_preprocess(self.data_dir)
-            
-            # Apply only numerical transformations
+            # Load and preprocess the Cool Roof dataset
+            features, labels = load_and_preprocess(self.data_dir)
+
+            # Apply transformations and create CoolRoofDataset
             dataset = CoolRoofDataset(features, labels, transform=preprocess_steps)
             return dataset, len(dataset)
 
@@ -499,18 +497,5 @@ class Data:
         
         class_weights = torch.Tensor(class_weights)
         return class_weights
-    
 
-from pycls.datasets.custom_datasets import CoolRoofDataset
-from pycls.datasets.preprocess_cool_roof import load_and_preprocess
 
-def getDataset(name, split, transform=None, test_transform=None):
-    if name == "cool_roof":
-        if split == "train":
-            features, labels, _, _ = load_and_preprocess("/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_roofs_varified.csv")
-            return CoolRoofDataset(features, labels, transform=transform, test_transform=test_transform)
-        elif split == "val":
-            _, _, unseen_cool_features, unseen_noncool_features = load_and_preprocess("/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_roofs_varified.csv")
-            features = np.vstack((unseen_cool_features, unseen_noncool_features))
-            labels = np.hstack((np.ones(unseen_cool_features.shape[0]), np.zeros(unseen_noncool_features.shape[0])))
-            return CoolRoofDataset(features, labels, transform=transform, test_transform=test_transform)

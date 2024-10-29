@@ -561,25 +561,19 @@ def test_epoch(test_loader, model, test_meter, cur_epoch):
     total_samples = 0
 
     for cur_iter, (inputs, labels) in enumerate(test_loader):
-        print(f"Inputs shape: {inputs.shape}, Labels shape: {labels.shape}")
+        # print(f"Inputs shape: {inputs.shape}, Labels shape: {labels.shape}")
         inputs, labels = inputs.cuda(), labels.cuda(non_blocking=True)
         inputs = inputs.type(torch.cuda.FloatTensor)
 
+        # Convert labels to 1D class indices if they are one-hot encoded
+        if labels.dim() > 1 and labels.size(1) > 1:
+            labels = labels.argmax(dim=1)
+
+        # Ensure labels are 1D tensors
+        labels = labels.view(-1)
+
         # Forward pass
         preds = model(inputs)
-
-        # Handle binary classification by squeezing predictions
-        if preds.dim() > 1 and preds.size(1) == 1:
-            preds = preds.squeeze(1)
-
-        # Check if the batch size of labels matches preds
-        if labels.dim() > 1 and labels.size(0) != preds.size(0):
-            # If labels are flattened across multiple samples, reshape them
-            labels = labels.view(preds.size(0), -1).squeeze(1)
-
-        # Ensure labels have the correct shape
-        if labels.size(0) != preds.size(0):
-            raise ValueError(f"Mismatch: preds batch size {preds.size(0)}, labels batch size {labels.size(0)}")
 
         # Compute top-1 error
         top1_err = mu.topk_errors(preds, labels, [1])[0]
@@ -597,14 +591,6 @@ def test_epoch(test_loader, model, test_meter, cur_epoch):
     test_meter.reset()
 
     return misclassifications / total_samples
-
-
-
-
-
-
-
-
 
 
 # if __name__ == "__main__":

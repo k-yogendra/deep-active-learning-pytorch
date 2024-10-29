@@ -9,6 +9,7 @@
 
 import builtins
 import decimal
+import torch
 import logging
 import os
 import simplejson
@@ -64,17 +65,68 @@ def get_logger(name):
     """Retrieves the logger."""
     return logging.getLogger(name)
 
+import numpy as np
+
+import simplejson
+import torch
+import decimal
+
+def tensor_to_serializable(obj):
+    """Converts tensors to serializable types."""
+    if isinstance(obj, torch.Tensor):
+        return obj.cpu().tolist() if obj.numel() > 1 else obj.item()
+    return obj
+
+def make_serializable(stats):
+    """
+    Converts the stats dictionary to a serializable format.
+    Handles tensors, float32, and potential circular references.
+    """
+    serializable_stats = {}
+    for k, v in stats.items():
+        # Convert tensors to serializable types
+        if isinstance(v, torch.Tensor):
+            v = v.cpu().tolist() if v.numel() > 1 else v.item()
+        # Convert float32 to Python float
+        elif isinstance(v, np.float32):
+            v = float(v)
+        # Convert floats to decimals for fixed-length float representation
+        elif isinstance(v, float):
+            v = decimal.Decimal('{:.12f}'.format(v))
+        serializable_stats[k] = v
+    return serializable_stats
 
 def log_json_stats(stats):
-    """Logs json stats."""
-    # Decimal + string workaround for having fixed len float vals in logs
-    stats = {
-        k: decimal.Decimal('{:.12f}'.format(v)) if isinstance(v, float) else v
-        for k, v in stats.items()
-    }
-    json_stats = simplejson.dumps(stats, sort_keys=True, use_decimal=True)
-    logger = get_logger(__name__)
-    logger.info('{:s}{:s}'.format(_TAG, json_stats))
+    """Logs JSON stats with handling for tensors and serialization."""
+    # Convert stats to a serializable format
+    stats = make_serializable(stats)
+    
+    try:
+        json_stats = simplejson.dumps(stats, sort_keys=True, use_decimal=True)
+        logger = get_logger(__name__)
+        logger.info('{:s}{:s}'.format(_TAG, json_stats))
+    except TypeError as e:
+        print(f"TypeError while serializing stats: {e}")
+        print(f"Stats causing issue: {stats}")
+
+
+
+# def log_json_stats(stats):
+#     """Logs json stats."""
+#     # Decimal + string workaround for having fixed len float vals in logs
+#     print(stats)
+#     print(stats.keys)
+#     print(stats.values)
+#     stats = {
+#         k: decimal.Decimal('{:.12f}'.format(v)) if isinstance(v, float) else v
+#         for k, v in stats.items()
+#     }
+#     # json_stats = simplejson.dumps(stats, sort_keys=True, use_decimal=True)
+#     json_stats = simplejson.dumps(stats, default=tensor_to_serializable, sort_keys=True, use_decimal=True)
+
+
+#     logger = get_logger(__name__)
+#     logger.info('{:s}{:s}'.format(_TAG, json_stats))
 
 
 def load_json_stats(log_file):

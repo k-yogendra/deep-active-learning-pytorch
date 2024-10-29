@@ -1,5 +1,6 @@
 import torch
 import torchvision
+import numpy as np
 from PIL import Image
 
 class CIFAR10(torchvision.datasets.CIFAR10):
@@ -130,12 +131,12 @@ from torch.utils.data import Dataset
 import torch
 
 class CoolRoofDataset(Dataset):
-    def __init__(self, features, labels, transform=None, test_transform=None):
+    def __init__(self, features, labels, transform=None, test_transform=None, no_aug=False):
         self.features = features
         self.labels = labels
         self.transform = transform
         self.test_transform = test_transform
-        self.no_aug = False
+        self.no_aug = no_aug
 
     def __len__(self):
         return len(self.features)
@@ -144,12 +145,20 @@ class CoolRoofDataset(Dataset):
         feature = self.features[idx]
         label = self.labels[idx]
 
-        # Convert features to torch tensor
-        feature = torch.tensor(feature, dtype=torch.float32)
+        # Convert feature to a PyTorch tensor if it's a NumPy array
+        if isinstance(feature, np.ndarray):
+            feature = torch.tensor(feature, dtype=torch.float32)
 
-        # Apply transformations suitable for numerical data
-        if self.transform is not None:
+        # Apply train or test transformation
+        if self.no_aug and self.test_transform:
+            feature = self.test_transform(feature)
+        elif not self.no_aug and self.transform:
             feature = self.transform(feature)
 
-        return feature, torch.tensor(label, dtype=torch.float32)
+        # Ensure label is a scalar (handle cases where it's a numpy array)
+        if isinstance(label, np.ndarray):
+            label = label.item()  # Convert to scalar if it's an array
+        else:
+            label = int(label)  # Convert to integer if it's not an array
 
+        return feature, label

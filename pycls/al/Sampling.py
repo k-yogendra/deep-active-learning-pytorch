@@ -292,65 +292,6 @@ class Sampling:
         return activeSet, uSet
 
 
-    def bald(self, budgetSize, uSet, clf_model, dataset):
-        "Implements BALD acquisition function where we maximize information gain."
-
-        clf_model.cuda(self.cuda_id)
-
-        assert self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS != 0, "Expected dropout iterations > 0."
-
-        #Set Batchnorm in eval mode whereas dropout in train mode
-        clf_model.train()
-        for m in clf_model.modules():
-            if isinstance(m, torch.nn.BatchNorm2d):
-                m.eval()
-
-        # if self.cfg.TRAIN.DATASET == "IMAGENET":
-        #     uSetLoader = imagenet_loader.construct_loader_no_aug(cfg=self.cfg, indices=uSet, isDistributed=False, isShuffle=False, isVaalSampling=False)
-        # else:
-        uSetLoader = self.dataObj.getSequentialDataLoader(indexes=uSet, batch_size=int(self.cfg.TRAIN.BATCH_SIZE/self.cfg.NUM_GPUS),data=dataset)
-        uSetLoader.dataset.no_aug = True
-        n_uPts = len(uSet)
-        # Source Code was in tensorflow
-        # To provide same readability we use same variable names where ever possible
-        # Original TF-Code: https://github.com/Riashat/Deep-Bayesian-Active-Learning/blob/master/MC_Dropout_Keras/Dropout_Bald_Q10_N1000_Paper.py#L223
-
-        # Heuristic: G_X - F_X
-        score_All = np.zeros(shape=(n_uPts, self.cfg.MODEL.NUM_CLASSES))
-        all_entropy_dropout = np.zeros(shape=(n_uPts))
-
-        for d in tqdm(range(self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS), desc="Dropout Iterations"):
-            dropout_score = self.get_predictions(clf_model=clf_model, idx_set=uSet, dataset=dataset)
-            
-            score_All += dropout_score
-
-            #computing F_x
-            dropout_score_log = np.log2(dropout_score+1e-6)#Add 1e-6 to avoid log(0)
-            Entropy_Compute = -np.multiply(dropout_score, dropout_score_log)
-            Entropy_per_Dropout = np.sum(Entropy_Compute, axis=1)
-
-            all_entropy_dropout += Entropy_per_Dropout
-
-        Avg_Pi = np.divide(score_All, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
-        Log_Avg_Pi = np.log2(Avg_Pi+1e-6)
-        Entropy_Avg_Pi = -np.multiply(Avg_Pi, Log_Avg_Pi)
-        Entropy_Average_Pi = np.sum(Entropy_Avg_Pi, axis=1)
-        G_X = Entropy_Average_Pi
-        Average_Entropy = np.divide(all_entropy_dropout, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
-        F_X = Average_Entropy
-
-        U_X = G_X - F_X
-        print("U_X.shape: ",U_X.shape)
-        sorted_idx = np.argsort(U_X)[::-1] # argsort helps to return the indices of u_scores such that their corresponding values are sorted.
-        activeSet = sorted_idx[:budgetSize]
-
-        activeSet = uSet[activeSet]
-        remainSet = uSet[sorted_idx[budgetSize:]]
-        # Setting task model in train mode for further learning
-        clf_model.train()
-        uSetLoader.dataset.no_aug = False
-        return activeSet, remainSet
-
     def baldD(self, budgetSize, uSet, clf_model, dataset, diversity_factor=3):
         """
         BALD acquisition with diversity enhancement using clustering.
@@ -395,14 +336,32 @@ class Sampling:
         K = budgetSize * diversity_factor
         top_k_indices = np.argsort(U_X)[::-1][:K]
 
-        # Extract features for clustering using a list comprehension
-        top_k_features = [uSetLoader.dataset[idx][0].cpu().numpy() for idx in top_k_indices]
-        top_k_features = np.stack(top_k_features, axis=0)  # Shape: [K, C, H, W]
+        # Extract features for clustering
+        top_k_features = []
 
-        # Reshape top_k_features to 2D: [K, C*H*W] for KMeans
-        K, C, H, W = top_k_features.shape
-        top_k_features = top_k_features.reshape(K, C * H * W)
+        for idx in top_k_indices:
+            feature = uSetLoader.dataset[idx][0]
 
+            # Convert to NumPy array if it's a tensor
+            if isinstance(feature, torch.Tensor):
+                feature = feature.cpu().numpy()
+
+            # If feature is 3D with shape (1, 30), flatten to 2D
+            if feature.ndim == 3 and feature.shape[0] == 1:
+                feature = feature.reshape(-1)  # Flatten to 1D
+
+            top_k_features.append(feature)
+
+        # Stack features into a 2D array: [K, D] for KMeans
+        top_k_features = np.stack(top_k_features, axis=0)
+
+        # Ensure 2D shape
+        if top_k_features.ndim == 2:
+            K, D = top_k_features.shape
+        else:
+            raise ValueError(f"Unexpected feature shape after flattening: {top_k_features.shape}")
+
+        # K-Means clustering
         kmeans = KMeans(n_clusters=budgetSize, random_state=42)
         cluster_labels = kmeans.fit_predict(top_k_features)
 
@@ -420,10 +379,10 @@ class Sampling:
         uSetLoader.dataset.no_aug = False
 
         return activeSet, remainSet
-    
-    def adaptive_disparity_sampling(self, budgetSize, uSet, clf_model, dataset, alpha=0.5):
+
+    def adaptive_disparity_sampling(self, budgetSize, uSet, clf_model, dataset, U_X=None, diversity_factor=3):
         """
-        Adaptive Disparity Sampling (ADS): Balances uncertainty and diversity adaptively.
+        Adaptive Disparity Sampling with clustering.
         """
         clf_model.cuda(self.cuda_id)
         clf_model.train()
@@ -438,37 +397,76 @@ class Sampling:
             data=dataset
         )
         uSetLoader.dataset.no_aug = True
-        n_uPts = len(uSet)
 
-        score_All = np.zeros(shape=(n_uPts, self.cfg.MODEL.NUM_CLASSES))
+        # If U_X is not provided, compute it
+        if U_X is None:
+            n_uPts = len(uSet)
+            score_All = np.zeros((n_uPts, self.cfg.MODEL.NUM_CLASSES))
+            all_entropy_dropout = np.zeros((n_uPts))
 
-        for _ in tqdm(range(self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS), desc="Dropout Iterations"):
-            dropout_score = self.get_predictions(clf_model=clf_model, idx_set=uSet, dataset=dataset)
-            score_All += dropout_score
+            for _ in range(self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS):
+                dropout_score = self.get_predictions(clf_model=clf_model, idx_set=uSet, dataset=dataset)
+                score_All += dropout_score
 
-        Avg_Pi = np.divide(score_All, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
-        U_X = -np.sum(Avg_Pi * np.log2(Avg_Pi + 1e-6), axis=1)
+                dropout_score_log = np.log2(dropout_score + 1e-6)
+                entropy_compute = -np.multiply(dropout_score, dropout_score_log)
+                entropy_per_dropout = np.sum(entropy_compute, axis=1)
+                all_entropy_dropout += entropy_per_dropout
 
-        # Calculate diversity using clustering
-        top_k_indices = np.argsort(U_X)[::-1][:budgetSize * 3]
-        top_k_features = [uSetLoader.dataset[idx][0].cpu().numpy() for idx in top_k_indices]
-        top_k_features = np.stack(top_k_features, axis=0)  # Shape: [K, C, H, W]
+            avg_pi = np.divide(score_All, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
+            log_avg_pi = np.log2(avg_pi + 1e-6)
+            entropy_avg_pi = -np.multiply(avg_pi, log_avg_pi)
+            entropy_average_pi = np.sum(entropy_avg_pi, axis=1)
+            g_x = entropy_average_pi
+            average_entropy = np.divide(all_entropy_dropout, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
+            f_x = average_entropy
+            U_X = g_x - f_x
 
-        # Reshape top_k_features to 2D: [K, C*H*W] for MiniBatchKMeans
-        K, C, H, W = top_k_features.shape
-        top_k_features = top_k_features.reshape(K, C * H * W)
+        top_k_features = []
 
-        # Use MiniBatchKMeans for faster clustering
-        kmeans = MiniBatchKMeans(n_clusters=budgetSize, n_init=10, random_state=42, batch_size=100)
+        # Collect features
+        for idx in uSet:
+            feature = uSetLoader.dataset[idx][0]
+
+            # Convert to NumPy array if it's a tensor
+            if isinstance(feature, torch.Tensor):
+                feature = feature.cpu().numpy()
+
+            # If feature is 1D or 3D with singleton dimension, flatten to 1D
+            if feature.ndim == 3 and feature.shape[0] == 1:
+                feature = feature.reshape(-1)  # Flatten to 1D
+            elif feature.ndim == 1:
+                feature = feature  # Already 1D, no changes needed
+
+            top_k_features.append(feature)
+
+        # Stack features into a 2D array: [K, D]
+        top_k_features = np.stack(top_k_features, axis=0)
+
+        # K-Means clustering on 2D features
+        kmeans = KMeans(n_clusters=budgetSize, n_init=10, random_state=42)
         cluster_labels = kmeans.fit_predict(top_k_features)
 
-        D_X = np.zeros(n_uPts)
+        selected_indices = []
+
+        # Select representatives from each cluster
         for cluster in range(budgetSize):
             cluster_member_indices = np.where(cluster_labels == cluster)[0]
-            D_X[top_k_indices[cluster_member_indices]] = 1
 
-        ADS_Score = alpha * U_X + (1 - alpha) * D_X
-        selected_indices = np.argsort(ADS_Score)[::-1][:budgetSize]
+            # Handle empty cluster or out-of-bounds index
+            if len(cluster_member_indices) == 0:
+                continue  # Skip empty clusters
+
+            cluster_bald_scores = U_X[cluster_member_indices]
+
+            # Find the best element in the cluster
+            best_in_cluster = np.argmax(cluster_bald_scores)
+
+            # Ensure the index is within bounds
+            if best_in_cluster < len(cluster_member_indices):
+                selected_indices.append(cluster_member_indices[best_in_cluster])
+            else:
+                selected_indices.append(cluster_member_indices[0])  # Fallback to the first element
 
         activeSet = uSet[selected_indices]
         remainSet = np.delete(np.array(uSet), selected_indices)
@@ -522,9 +520,9 @@ class Sampling:
 
         return activeSet, remainSet
 
-    def decision_boundary_exploration(self, budgetSize, uSet, clf_model, dataset, gamma=0.5):
+    def decision_boundary_exploration(self, budgetSize, uSet, clf_model, dataset, U_X=None, diversity_factor=3):
         """
-        Decision Boundary Exploration (DBE): Focuses on samples closest to the decision boundary.
+        Decision Boundary Exploration with clustering.
         """
         clf_model.cuda(self.cuda_id)
         clf_model.train()
@@ -539,38 +537,153 @@ class Sampling:
             data=dataset
         )
         uSetLoader.dataset.no_aug = True
-        n_uPts = len(uSet)
 
+        # If U_X is not provided, compute it
+        if U_X is None:
+            n_uPts = len(uSet)
+            score_All = np.zeros((n_uPts, self.cfg.MODEL.NUM_CLASSES))
+            all_entropy_dropout = np.zeros((n_uPts))
+
+            for _ in range(self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS):
+                dropout_score = self.get_predictions(clf_model=clf_model, idx_set=uSet, dataset=dataset)
+                score_All += dropout_score
+
+                dropout_score_log = np.log2(dropout_score + 1e-6)
+                entropy_compute = -np.multiply(dropout_score, dropout_score_log)
+                entropy_per_dropout = np.sum(entropy_compute, axis=1)
+                all_entropy_dropout += entropy_per_dropout
+
+            avg_pi = np.divide(score_All, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
+            log_avg_pi = np.log2(avg_pi + 1e-6)
+            entropy_avg_pi = -np.multiply(avg_pi, log_avg_pi)
+            entropy_average_pi = np.sum(entropy_avg_pi, axis=1)
+            g_x = entropy_average_pi
+            average_entropy = np.divide(all_entropy_dropout, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
+            f_x = average_entropy
+            U_X = g_x - f_x
+
+        top_k_features = []
+
+        # Collect features
+        for idx in uSet:
+            feature = uSetLoader.dataset[idx][0]
+
+            # Convert to NumPy array if it's a tensor
+            if isinstance(feature, torch.Tensor):
+                feature = feature.cpu().numpy()
+
+            # Flatten to 1D if necessary
+            if feature.ndim == 3 and feature.shape[0] == 1:
+                feature = feature.flatten()
+            elif feature.ndim == 1:
+                feature = feature  # Already 1D
+
+            top_k_features.append(feature)
+
+        # Stack features into a 2D array
+        top_k_features = np.stack(top_k_features, axis=0)
+
+        # K-Means clustering on 2D features
+        kmeans = KMeans(n_clusters=budgetSize, n_init=10, random_state=42)
+        cluster_labels = kmeans.fit_predict(top_k_features)
+
+        selected_indices = []
+
+        # Select representatives from each cluster
+        for cluster in range(budgetSize):
+            cluster_member_indices = np.where(cluster_labels == cluster)[0]
+
+            # Handle empty clusters
+            if len(cluster_member_indices) == 0:
+                continue
+
+            cluster_bald_scores = U_X[cluster_member_indices]  # Use the uncertainty scores for selection
+
+            # Find the best element in the cluster
+            best_in_cluster = np.argmax(cluster_bald_scores)
+            selected_indices.append(cluster_member_indices[best_in_cluster])
+
+        activeSet = uSet[selected_indices]
+        remainSet = np.delete(np.array(uSet), selected_indices)
+
+        clf_model.train()
+        uSetLoader.dataset.no_aug = False
+
+        return activeSet, remainSet
+
+
+
+    def contextual_clarity_sampling(self, budgetSize, uSet, clf_model, dataset, diversity_factor=3):
+        """
+        Contextual Clarity Sampling for Active Learning.
+        """
+        clf_model.cuda(self.cuda_id)
+        clf_model.train()
+
+        for m in clf_model.modules():
+            if isinstance(m, torch.nn.BatchNorm2d):
+                m.eval()
+
+        uSetLoader = self.dataObj.getSequentialDataLoader(
+            indexes=uSet,
+            batch_size=int(self.cfg.TRAIN.BATCH_SIZE / self.cfg.NUM_GPUS),
+            data=dataset
+        )
+        uSetLoader.dataset.no_aug = True
+
+        n_uPts = len(uSet)
         score_All = np.zeros(shape=(n_uPts, self.cfg.MODEL.NUM_CLASSES))
+        all_entropy_dropout = np.zeros(shape=(n_uPts))
 
         for _ in tqdm(range(self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS), desc="Dropout Iterations"):
             dropout_score = self.get_predictions(clf_model=clf_model, idx_set=uSet, dataset=dataset)
             score_All += dropout_score
 
+            dropout_score_log = np.log2(dropout_score + 1e-6)
+            Entropy_Compute = -np.multiply(dropout_score, dropout_score_log)
+            Entropy_per_Dropout = np.sum(Entropy_Compute, axis=1)
+            all_entropy_dropout += Entropy_per_Dropout
+
         Avg_Pi = np.divide(score_All, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
-        Boundary_Dist = np.abs(Avg_Pi - 0.5).mean(axis=1)  # Closeness to decision boundary
+        Log_Avg_Pi = np.log2(Avg_Pi + 1e-6)
+        Entropy_Avg_Pi = -np.multiply(Avg_Pi, Log_Avg_Pi)
+        Entropy_Average_Pi = np.sum(Entropy_Avg_Pi, axis=1)
+        G_X = Entropy_Average_Pi
+        Average_Entropy = np.divide(all_entropy_dropout, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
+        F_X = Average_Entropy
+        U_X = G_X - F_X
 
-        # Step 1: Select top K samples based on boundary distance
-        K = budgetSize * 3
-        top_k_indices = np.argsort(Boundary_Dist)[:K]
+        # Step 1: Select a larger set based on top BALD scores
+        K = budgetSize * diversity_factor
+        top_k_indices = np.argsort(U_X)[::-1][:K]
 
-        # Extract features for clustering using a list comprehension
-        top_k_features = [uSetLoader.dataset[idx][0].cpu().numpy() for idx in top_k_indices]
-        top_k_features = np.stack(top_k_features, axis=0)  # Shape: [K, C, H, W]
+        # Extract features for clustering and ensure correct shape
+        top_k_features = [uSetLoader.dataset[idx][0].unsqueeze(0) for idx in top_k_indices]
+        top_k_features = torch.stack(top_k_features, dim=0)  # Stack to form a batch
 
-        # Reshape top_k_features to 2D: [K, C*H*W] for KMeans
-        K, C, H, W = top_k_features.shape
-        top_k_features = top_k_features.reshape(K, C * H * W)
+        # Add missing dimensions if necessary
+        if len(top_k_features.shape) == 3:  # If [K, 1, 30], add two dimensions
+            top_k_features = top_k_features.unsqueeze(2).unsqueeze(3)  # Reshape to [K, 1, 30, 1, 1]
 
-        # Step 2: Apply KMeans clustering for diversity
+        # Remove unnecessary dimensions to ensure 4D shape
+        top_k_features = top_k_features.squeeze(1)  # Remove singleton dimension
+
+        # Ensure the reshaped features have the expected 4D shape
+        if len(top_k_features.shape) != 4:
+            raise ValueError(f"Unexpected feature shape: {top_k_features.shape}, expected 4D array.")
+
+        # Step 2: Perform clustering for diversity
+        batch_size, channels, height, width = top_k_features.shape
+        flattened_features = top_k_features.view(batch_size, -1)  # Reshape to [K, C*H*W]
+
         kmeans = KMeans(n_clusters=budgetSize, random_state=42)
-        cluster_labels = kmeans.fit_predict(top_k_features)
+        cluster_labels = kmeans.fit_predict(flattened_features.cpu().numpy())
 
         selected_indices = []
         for cluster in range(budgetSize):
             cluster_member_indices = np.where(cluster_labels == cluster)[0]
-            cluster_boundary_scores = Boundary_Dist[top_k_indices[cluster_member_indices]]
-            best_in_cluster = cluster_member_indices[np.argmin(cluster_boundary_scores)]
+            cluster_bald_scores = U_X[top_k_indices[cluster_member_indices]]  # Use the uncertainty scores for selection
+            best_in_cluster = cluster_member_indices[np.argmax(cluster_bald_scores)]
             selected_indices.append(top_k_indices[best_in_cluster])
 
         activeSet = uSet[selected_indices]
@@ -581,57 +694,7 @@ class Sampling:
 
         return activeSet, remainSet
 
-    def contextual_clarity_sampling(self, budgetSize, uSet, clf_model, dataset, beta=0.5):
-        """
-        Contextual Clarity Sampling (CCS): Focuses on contextually ambiguous samples.
-        """
-        clf_model.cuda(self.cuda_id)
-        clf_model.train()
 
-        for m in clf_model.modules():
-            if isinstance(m, torch.nn.BatchNorm2d):
-                m.eval()
-
-        uSetLoader = self.dataObj.getSequentialDataLoader(
-            indexes=uSet, 
-            batch_size=int(self.cfg.TRAIN.BATCH_SIZE / self.cfg.NUM_GPUS), 
-            data=dataset
-        )
-        uSetLoader.dataset.no_aug = True
-        n_uPts = len(uSet)
-
-        score_All = np.zeros(shape=(n_uPts, self.cfg.MODEL.NUM_CLASSES))
-
-        for _ in tqdm(range(self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS), desc="Dropout Iterations"):
-            dropout_score = self.get_predictions(clf_model=clf_model, idx_set=uSet, dataset=dataset)
-            score_All += dropout_score
-
-        Avg_Pi = np.divide(score_All, self.cfg.ACTIVE_LEARNING.DROPOUT_ITERATIONS)
-        GlobalEntropy = -np.sum(Avg_Pi * np.log2(Avg_Pi + 1e-6), axis=1)  # Shape: [n_uPts]
-
-        # Calculate contextual entropy based on nearest neighbors in feature space
-        top_k_features = [uSetLoader.dataset[idx][0].cpu().numpy() for idx in range(n_uPts)]
-        top_k_features = np.stack(top_k_features, axis=0)  # Shape: [n_uPts, C, H, W]
-        
-        # Reshape to 2D: [n_uPts, C*H*W]
-        n_uPts, C, H, W = top_k_features.shape
-        top_k_features = top_k_features.reshape(n_uPts, C * H * W)
-
-        # Calculate local entropy as variance over features
-        LocalEntropy = np.var(top_k_features, axis=1)  # Shape: [n_uPts]
-
-        # Adjusted CCS score calculation
-        CCS_Score = LocalEntropy - beta * GlobalEntropy
-
-        selected_indices = np.argsort(CCS_Score)[::-1][:budgetSize]
-
-        activeSet = uSet[selected_indices]
-        remainSet = np.delete(np.array(uSet), selected_indices)
-
-        clf_model.train()
-        uSetLoader.dataset.no_aug = False
-
-        return activeSet, remainSet
 
     def uncertainty_propagation_sampling(self, budgetSize, uSet, clf_model, dataset, delta=0.5):
         """
