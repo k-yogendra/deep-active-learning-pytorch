@@ -37,9 +37,9 @@ _models = {
     'alexnet': alexnet,
 
     # MLP architecture
-    'mlp': lambda input_dim, num_classes, use_dropout=True: MLPClassifierTorch(
+    'mlp': lambda input_dim, use_dropout=True: MLPClassifierTorch(
     input_dim=input_dim,
-    num_classes=num_classes,
+    # num_classes=num_classes,
     use_dropout=use_dropout
 )  # Use 30 as placeholder input dimension
 }
@@ -63,20 +63,18 @@ def get_loss_fun(cfg):
 
 
 def build_model(cfg):
-    """Builds the model."""
-    model_class = get_model(cfg)
+    input_dim = cfg.DATASET.INPUT_DIM
+    num_classes = cfg.MODEL.NUM_CLASSES
 
     if cfg.MODEL.TYPE == "mlp":
-        input_dim = cfg.DATASET.INPUT_DIM  # Fetch input dimension from the config
-        num_classes = cfg.MODEL.NUM_CLASSES
-        model = model_class(input_dim=input_dim, num_classes=num_classes)
+        from pycls.models.mlp import MLPClassifierTorch
+        model = MLPClassifierTorch(input_dim=input_dim, use_dropout=True)
     else:
-        model = model_class(num_classes=cfg.MODEL.NUM_CLASSES, use_dropout=True)
-
-    if cfg.DATASET.NAME == 'MNIST':
-        model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-
+        model_class = get_model_class(cfg.MODEL.TYPE)
+        model = model_class(input_dim=input_dim, num_classes=num_classes)
+    
     return model
+
 
 
 def build_loss_fun(cfg):

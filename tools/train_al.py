@@ -3,9 +3,10 @@ import sys
 from datetime import datetime
 import argparse
 import numpy as np
-
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
+import torch
 import torch.nn.functional as F
 
 # local
@@ -49,44 +50,75 @@ def argparser():
 
     return parser
 
+
 def plot_arrays(x_vals, y_vals, x_name, y_name, dataset_name, out_dir, isDebug=False):
-    # if not du.is_master_proc():
-    #     return
-    
-    import matplotlib.pyplot as plt
+    """
+    Plots the given x and y values and saves the plot to a file.
+    """
+    # Move tensors to CPU and convert to numpy if needed
+    if isinstance(x_vals, torch.Tensor):
+        x_vals = x_vals.detach().cpu().numpy()
+    elif isinstance(x_vals, list):
+        x_vals = [x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x for x in x_vals]
+
+    if isinstance(y_vals, torch.Tensor):
+        y_vals = y_vals.detach().cpu().numpy()
+    elif isinstance(y_vals, list):
+        y_vals = [y.detach().cpu().numpy() if isinstance(y, torch.Tensor) else y for y in y_vals]
+
+    # Plotting
     temp_name = "{}_vs_{}".format(x_name, y_name)
+    plt.figure()
+    plt.plot(x_vals, y_vals, marker='o')
     plt.xlabel(x_name)
     plt.ylabel(y_name)
-    plt.title("Dataset: {}; {}".format(dataset_name, temp_name))
-    plt.plot(x_vals, y_vals)
+    plt.title(f"Dataset: {dataset_name}; {temp_name}")
 
-    if isDebug: print("plot_saved at : {}".format(os.path.join(out_dir, temp_name+'.png')))
+    plot_path = os.path.join(out_dir, temp_name + ".png")
+    if isDebug:
+        print(f"Plot saved at: {plot_path}")
 
-    plt.savefig(os.path.join(out_dir, temp_name+".png"))
+    plt.savefig(plot_path)
     plt.close()
 
+
 def save_plot_values(temp_arrays, temp_names, out_dir, isParallel=True, saveInTextFormat=True, isDebug=True):
-
-    """ Saves arrays provided in the list in npy format """
-    # Return if not master process
-    # if isParallel:
-    #     if not du.is_master_proc():
-    #         return
-
+    """ Saves arrays provided in the list in npy or text format. """
+    
     for i in range(len(temp_arrays)):
-        temp_arrays[i] = np.array(temp_arrays[i])
-        temp_dir = out_dir
-        # if cfg.TRAIN.TRANSFER_EXP:
-        #     temp_dir += os.path.join("transfer_experiment",cfg.MODEL.TRANSFER_MODEL_TYPE+"_depth_"+str(cfg.MODEL.TRANSFER_MODEL_DEPTH))+"/"
+        # Handle tensor conversion properly
+        if isinstance(temp_arrays[i], torch.Tensor):
+            temp_arrays[i] = temp_arrays[i].detach().cpu().numpy()  # Detach, move to CPU, and convert to numpy
+        
+        elif isinstance(temp_arrays[i], list):
+            # Handle lists of tensors by converting each element
+            temp_arrays[i] = np.array([
+                x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
+                for x in temp_arrays[i]
+            ])
+        
+        else:
+            # Convert non-tensor elements to numpy arrays
+            temp_arrays[i] = np.array(temp_arrays[i])
 
+        temp_dir = out_dir
+
+        # Create directory if it doesn't exist
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
+
+        # Save in the specified format
         if saveInTextFormat:
-            # if isDebug: print(f"Saving {temp_names[i]} at {temp_dir+temp_names[i]}.txt in text format!!")
-            np.savetxt(temp_dir+'/'+temp_names[i]+".txt", temp_arrays[i], fmt="%1.2f")
+            if isDebug:
+                print(f"Saving {temp_names[i]} at {temp_dir}/{temp_names[i]}.txt in text format!")
+            np.savetxt(f"{temp_dir}/{temp_names[i]}.txt", temp_arrays[i], fmt="%1.2f")
         else:
-            # if isDebug: print(f"Saving {temp_names[i]} at {temp_dir+temp_names[i]}.npy in numpy format!!")
-            np.save(temp_dir+'/'+temp_names[i]+".npy", temp_arrays[i])
+            if isDebug:
+                print(f"Saving {temp_names[i]} at {temp_dir}/{temp_names[i]}.npy in numpy format!")
+            np.save(f"{temp_dir}/{temp_names[i]}.npy", temp_arrays[i])
+
+
+
 
 def is_eval_epoch(cur_epoch):
     """Determines if the model should be evaluated at the current epoch."""
@@ -331,7 +363,12 @@ def train_model(train_loader, val_loader, model, optimizer, cfg):
         save_plot_values([plot_epoch_xvalues, plot_epoch_yvalues, plot_it_x_values, plot_it_y_values, val_acc_epochs_x, val_acc_epochs_y], \
                 ["plot_epoch_xvalues", "plot_epoch_yvalues", "plot_it_x_values", "plot_it_y_values","val_acc_epochs_x","val_acc_epochs_y"], out_dir=cfg.EPISODE_DIR)
 
-        print('Training Epoch: {}/{}\tTrain Loss: {}\tVal Accuracy: {}'.format(cur_epoch+1, cfg.OPTIM.MAX_EPOCH, round(train_loss, 4), round(val_set_acc, 4)))
+        print('Training Epoch: {}/{}\tTrain Loss: {}\tVal Accuracy: {}'.format(
+    cur_epoch+1, 
+    cfg.OPTIM.MAX_EPOCH, 
+    round(train_loss.item(), 4) if isinstance(train_loss, torch.Tensor) else round(train_loss, 4),
+    round(val_set_acc.item(), 4) if isinstance(val_set_acc, torch.Tensor) else round(val_set_acc, 4)))
+
 
     # Save the best model checkpoint (Episode level)
     checkpoint_file = cu.save_checkpoint(info="vlBest_acc_"+str(int(temp_best_val_acc)), \
@@ -417,16 +454,12 @@ def train_epoch(train_loader, model, loss_fun, optimizer, train_meter, cur_epoch
 
     len_train_loader = len(train_loader)
     for cur_iter, (inputs, labels) in enumerate(train_loader):
-        # Convert inputs to float tensors and labels to long tensors
+        # Convert inputs to float tensors and labels to float tensors
         inputs = inputs.float().cuda(non_blocking=True)
-        labels = labels.long().cuda(non_blocking=True)  # Ensure labels are Long tensors
+        labels = labels.float().view(-1, 1).cuda(non_blocking=True)  # Reshape labels to [batch_size, 1]
 
         # Forward pass
         preds = model(inputs)
-
-        # Ensure preds have shape [batch_size, num_classes] (for cross_entropy)
-        if preds.dim() == 1:
-            preds = preds.unsqueeze(1)
 
         # Compute the loss
         loss = loss_fun(preds, labels)
@@ -436,25 +469,14 @@ def train_epoch(train_loader, model, loss_fun, optimizer, train_meter, cur_epoch
         loss.backward()
         optimizer.step()
 
-        # Compute the errors
-        if cfg.MODEL.NUM_CLASSES > 2:
-            top1_err, top5_err = mu.topk_errors(preds, labels, [1, 5])
-        else:
-            top1_err = mu.topk_errors(preds, labels, [1])[0]  # Only get top-1 error
-
-        # Copy the stats from GPU to CPU (sync point)
-        # Copy the stats from GPU to CPU (sync point)
-        if isinstance(loss, torch.Tensor):
-            loss = loss.item()
-
-        if isinstance(top1_err, torch.Tensor):
-            top1_err = top1_err.item()
-
+        # Compute the errors (for binary classification, use accuracy)
+        preds_binary = (torch.sigmoid(preds) > 0.5).float()  # Convert logits to binary predictions
+        top1_err = (preds_binary != labels).float().mean().item()  # Calculate binary error rate
 
         # Plotting and logging every 19 iterations
         if cur_iter != 0 and cur_iter % 19 == 0:
             plot_it_x_values.append((cur_epoch) * len_train_loader + cur_iter)
-            plot_it_y_values.append(loss)
+            plot_it_y_values.append(loss.item())
             save_plot_values(
                 [plot_it_x_values, plot_it_y_values],
                 ["plot_it_x_values", "plot_it_y_values"],
@@ -475,7 +497,7 @@ def train_epoch(train_loader, model, loss_fun, optimizer, train_meter, cur_epoch
         train_meter.iter_toc()
         train_meter.update_stats(
             top1_err=top1_err, 
-            loss=loss, 
+            loss=loss.item(), 
             lr=lr, 
             mb_size=inputs.size(0) * cfg.NUM_GPUS
         )
@@ -487,6 +509,7 @@ def train_epoch(train_loader, model, loss_fun, optimizer, train_meter, cur_epoch
     train_meter.reset()
 
     return loss, clf_iter_count
+
 
 
 
@@ -546,6 +569,7 @@ def train_epoch(train_loader, model, loss_fun, optimizer, train_meter, cur_epoch
 #     test_meter.reset()
 
 #     return misclassifications/totalSamples
+import torch
 
 @torch.no_grad()
 def test_epoch(test_loader, model, test_meter, cur_epoch):
@@ -561,22 +585,20 @@ def test_epoch(test_loader, model, test_meter, cur_epoch):
     total_samples = 0
 
     for cur_iter, (inputs, labels) in enumerate(test_loader):
-        # print(f"Inputs shape: {inputs.shape}, Labels shape: {labels.shape}")
-        inputs, labels = inputs.cuda(), labels.cuda(non_blocking=True)
-        inputs = inputs.type(torch.cuda.FloatTensor)
+        inputs, labels = inputs.cuda(non_blocking=True), labels.cuda(non_blocking=True)
+        inputs = inputs.float()  # Convert inputs to float tensor
 
-        # Convert labels to 1D class indices if they are one-hot encoded
-        if labels.dim() > 1 and labels.size(1) > 1:
-            labels = labels.argmax(dim=1)
-
-        # Ensure labels are 1D tensors
-        labels = labels.view(-1)
+        # Reshape labels to match model output shape for binary classification
+        labels = labels.float().view(-1, 1)
 
         # Forward pass
         preds = model(inputs)
 
-        # Compute top-1 error
-        top1_err = mu.topk_errors(preds, labels, [1])[0]
+        # Convert logits to binary predictions
+        preds_binary = (torch.sigmoid(preds) > 0.5).float()
+
+        # Calculate binary error (1 - accuracy)
+        top1_err = (preds_binary != labels).float().mean().item()
 
         # Accumulate errors and samples
         misclassifications += float(top1_err * inputs.size(0))
@@ -590,7 +612,9 @@ def test_epoch(test_loader, model, test_meter, cur_epoch):
     test_meter.log_epoch_stats(cur_epoch)
     test_meter.reset()
 
+    # Calculate and return overall binary error rate
     return misclassifications / total_samples
+
 
 
 # if __name__ == "__main__":

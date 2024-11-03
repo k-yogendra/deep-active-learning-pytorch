@@ -1,40 +1,84 @@
+# # General configuration
+# EXP_NAME: "mlp_experiment"
+# NUM_GPUS: 1
+# RNG_SEED: 42  # Random seed for reproducibility
+
+# # Dataset configuration
+# DATASET:
+#   NAME: "cool_roof"  # Update based on your dataset name
+#   ROOT_DIR: "/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_labels_enriched.csv"  # Path to your dataset
+#   INPUT_DIM: 30  # Input dimension for MLP (based on your feature vectors)
+#   VAL_RATIO: 0.1  # Validation set ratio
+#   AUG_METHOD: "none"  # No data augmentation for MLP
+
+# # Model configuration
+# MODEL:
+#   TYPE: "mlp"  # Set to 'mlp' for the MLP model
+#   NUM_CLASSES: 2  # Example: Adjust based on your classification task
+#   LOSS_FUN: "cross_entropy"
+
+# # Training configuration
+# TRAIN:
+#   BATCH_SIZE: 128
+#   EVAL_PERIOD: 1  # Evaluate every epoch
+#   CHECKPOINT_PERIOD: 5  # Save a checkpoint every 5 epochs
+
+# # Optimization configuration
+# OPTIM:
+#   TYPE: "adam"  # Use Adam optimizer
+#   BASE_LR: 0.001  # Learning rate
+#   MAX_EPOCH: 100  # Maximum number of epochs
+
+# # Active learning configuration (if applicable)
+# ACTIVE_LEARNING:
+#   SAMPLING_FN: "dbal"  # Active learning sampling function
+#   INIT_L_RATIO: 0.1  # Initial labeled data ratio
+#   MAX_ITER: 5  # Max active learning iterations
+#   BUDGET_SIZE: 500  # Adjust this to a suitable value
+
+# # Miscellaneous
+# DATA_LOADER:
+#   NUM_WORKERS: 4
+#   PIN_MEMORY: True
+
+
 # General configuration
 EXP_NAME: "mlp_experiment"
 NUM_GPUS: 1
-RNG_SEED: 42  # Random seed for reproducibility
+RNG_SEED: 42
 
 # Dataset configuration
 DATASET:
-  NAME: "cool_roof"  # Update based on your dataset name
-  ROOT_DIR: "/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_labels_enriched.csv"  # Path to your dataset
-  INPUT_DIM: 30  # Input dimension for MLP (based on your feature vectors)
-  VAL_RATIO: 0.1  # Validation set ratio
-  AUG_METHOD: "none"  # No data augmentation for MLP
+  NAME: "cool_roof"
+  ROOT_DIR: "/home/yogendra/cool-roofs-active-learning/data/csv_files/chandigarh/chandigarh_labels_enriched.csv"
+  INPUT_DIM: 30
+  VAL_RATIO: 0.1
+  AUG_METHOD: "none"
 
 # Model configuration
 MODEL:
-  TYPE: "mlp"  # Set to 'mlp' for the MLP model
-  NUM_CLASSES: 2  # Example: Adjust based on your classification task
-  LOSS_FUN: "cross_entropy"
+  TYPE: "mlp"
+  NUM_CLASSES: 1  # Single output for binary classification
+  LOSS_FUN: "bce_with_logits"
 
 # Training configuration
 TRAIN:
   BATCH_SIZE: 128
-  EVAL_PERIOD: 1  # Evaluate every epoch
-  CHECKPOINT_PERIOD: 5  # Save a checkpoint every 5 epochs
+  EVAL_PERIOD: 1
+  CHECKPOINT_PERIOD: 5
 
 # Optimization configuration
 OPTIM:
-  TYPE: "adam"  # Use Adam optimizer
-  BASE_LR: 0.001  # Learning rate
-  MAX_EPOCH: 100  # Maximum number of epochs
+  TYPE: "adam"
+  BASE_LR: 0.001
+  MAX_EPOCH: 100
 
-# Active learning configuration (if applicable)
+# Active learning configuration
 ACTIVE_LEARNING:
-  SAMPLING_FN: "dbal"  # Active learning sampling function
-  INIT_L_RATIO: 0.1  # Initial labeled data ratio
-  MAX_ITER: 5  # Max active learning iterations
-  BUDGET_SIZE: 500  # Adjust this to a suitable value
+  SAMPLING_FN: "dbal"
+  INIT_L_RATIO: 0.1
+  MAX_ITER: 5
+  BUDGET_SIZE: 500
 
 # Miscellaneous
 DATA_LOADER:
